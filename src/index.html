@@ -95,7 +95,9 @@
               <option value="original">保持原始包装</option>
             </select>
 
-            <button type="button" id="copyAllBtn" class="btn">复制全部</button>
+            <button type="button" id="formulaSheetBtn" class="btn ghost" title="查看并定位全篇公式（快捷键 f）" hidden>公式速览</button>
+            <button type="button" id="copyDocBtn" class="btn" title="复制清洗后的完整 Markdown（含公式与表格）">复制全文</button>
+            <button type="button" id="copyAllBtn" class="btn">复制全部公式</button>
             <button type="button" id="exportBtn" class="btn ghost">导出 .md</button>
           </div>
         </div>
@@ -138,6 +140,22 @@
       <textarea class="formula-source" spellcheck="false" rows="2" aria-label="公式 LaTeX 源码"></textarea>
     </article>
   </template>
+
+  <div id="formulaSheetModal" class="sheet-modal" role="dialog" aria-modal="true" aria-label="全篇公式速览" hidden>
+    <div class="sheet-dialog">
+      <div class="sheet-head">
+        <div class="sheet-title-wrap">
+          <h2>全篇公式速览</h2>
+          <span id="formulaSheetSubtitle" class="sheet-subtitle"></span>
+        </div>
+        <div class="sheet-head-actions">
+          <span class="sheet-shortcut">按 <kbd>f</kbd> 开关 · <kbd>Esc</kbd> 关闭</span>
+          <button type="button" id="formulaSheetClose" class="btn tiny ghost" aria-label="关闭公式速览">关闭</button>
+        </div>
+      </div>
+      <div id="formulaSheetBody" class="sheet-body"></div>
+    </div>
+  </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 

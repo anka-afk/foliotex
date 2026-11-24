@@ -28,8 +28,14 @@
     filterGroup: document.getElementById('filterGroup'),
     searchInput: document.getElementById('searchInput'),
     formatSelect: document.getElementById('formatSelect'),
+    formulaSheetBtn: document.getElementById('formulaSheetBtn'),
+    copyDocBtn: document.getElementById('copyDocBtn'),
     copyAllBtn: document.getElementById('copyAllBtn'),
     exportBtn: document.getElementById('exportBtn'),
+    formulaSheetModal: document.getElementById('formulaSheetModal'),
+    formulaSheetSubtitle: document.getElementById('formulaSheetSubtitle'),
+    formulaSheetBody: document.getElementById('formulaSheetBody'),
+    formulaSheetClose: document.getElementById('formulaSheetClose'),
     themeToggle: document.getElementById('themeToggle'),
     themeIcon: document.getElementById('themeIcon'),
     cardTemplate: document.getElementById('cardTemplate'),
@@ -54,6 +60,7 @@
 
   let saveTimer = null;
   let toastTimer = null;
+  let docFormulaEntries = [];
 
   function normalizeFormula(formula) {
     if (!formula || typeof formula.source !== 'string' || !formula.source.trim()) return null;
@@ -383,7 +390,7 @@
     span.dataset.render = renderAs;
     span.setAttribute('role', 'button');
     span.tabIndex = 0;
-    span.title = '点击复制公式';
+    span.title = '点击复制公式（Shift+点击复制纯源码）';
     return span;
   }
 
@@ -410,36 +417,197 @@
     };
   }
 
+  function hasActiveSelection() {
+    if (!window.getSelection) return false;
+    const sel = window.getSelection();
+    return !!(sel && !sel.isCollapsed && sel.toString().trim().length > 0);
+  }
+
+  function cleanHeadingLabel(el) {
+    if (!el) return '';
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('.katex-mathml').forEach(function (n) { n.remove(); });
+    return (clone.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
   function hydrateDocFormulas(root) {
     const lookup = buildDocLookup();
-    root.querySelectorAll('[data-doc-formula]').forEach(function (span) {
+    docFormulaEntries = [];
+
+    // Track nearest preceding heading for each formula so Formula Sheet can group by section
+    const flowNodes = Array.from(root.querySelectorAll('h1, h2, h3, h4, [data-doc-formula]'));
+    const sectionBySpan = new Map();
+    let currentSection = '';
+    flowNodes.forEach(function (node) {
+      if (/^H[1-4]$/.test(node.tagName)) {
+        currentSection = cleanHeadingLabel(node);
+      } else {
+        sectionBySpan.set(node, currentSection);
+      }
+    });
+
+    root.querySelectorAll('[data-doc-formula]').forEach(function (span, idx) {
       const source = span.dataset.source || '';
       if (!source) return;
       const type = span.dataset.type === 'display' ? 'display' : 'inline';
       const renderType = span.dataset.render === 'display' ? 'display' : 'inline';
       const formula = resolveDocFormula(lookup, source, type);
+      span.title = '点击复制公式（Shift+点击复制纯源码）';
       renderPreview(span, {
         source: formula.source,
         type: renderType
       });
 
-      function copyThis() {
-        copyFormula(formula, false);
+      docFormulaEntries.push({
+        index: idx + 1,
+        section: sectionBySpan.get(span) || '',
+        formula: formula,
+        renderType: renderType,
+        span: span
+      });
+
+      function copyThis(rawOnly) {
+        copyFormula(formula, !!rawOnly);
         span.classList.remove('copied');
         void span.offsetWidth;
         span.classList.add('copied');
       }
 
-      span.addEventListener('click', copyThis);
+      span.addEventListener('click', function (event) {
+        if (hasActiveSelection()) return;
+        copyThis(event.shiftKey);
+      });
       span.addEventListener('keydown', function (event) {
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
-        copyThis();
+        copyThis(event.shiftKey);
       });
       span.addEventListener('animationend', function () {
         span.classList.remove('copied');
       });
     });
+
+    updateFormulaSheetButton();
+  }
+
+  function updateFormulaSheetButton() {
+    if (!els.formulaSheetBtn) return;
+    const count = docFormulaEntries.length;
+    const show = state.view === 'doc' && count > 0;
+    els.formulaSheetBtn.hidden = !show;
+    if (show) {
+      els.formulaSheetBtn.textContent = '公式速览 (' + count + ')';
+    }
+  }
+
+  function closeFormulaSheet() {
+    if (!els.formulaSheetModal) return;
+    els.formulaSheetModal.hidden = true;
+  }
+
+  function openFormulaSheet() {
+    if (!els.formulaSheetModal || !els.formulaSheetBody || !docFormulaEntries.length) {
+      showToast('当前全文视图中没有可速览的公式', true);
+      return;
+    }
+
+    const displayCount = docFormulaEntries.filter(function (e) { return e.formula.type === 'display'; }).length;
+    const inlineCount = docFormulaEntries.length - displayCount;
+    els.formulaSheetSubtitle.textContent =
+      '共 ' + docFormulaEntries.length + ' 个公式（行间 ' + displayCount + ' · 行内 ' + inlineCount + '）· 直接点击公式即可复制';
+
+    els.formulaSheetBody.replaceChildren();
+
+    const groups = [];
+    docFormulaEntries.forEach(function (entry) {
+      const label = entry.section || '公式列表';
+      const last = groups[groups.length - 1];
+      if (last && last.label === label) last.items.push(entry);
+      else groups.push({ label: label, items: [entry] });
+    });
+
+    const frag = document.createDocumentFragment();
+    groups.forEach(function (group) {
+      const sec = document.createElement('section');
+      if (groups.length > 1 || group.label !== '公式列表') {
+        const h = document.createElement('h3');
+        h.className = 'sheet-section-title';
+        h.textContent = group.label;
+        sec.appendChild(h);
+      }
+
+      const list = document.createElement('div');
+      list.className = 'sheet-list';
+
+      group.items.forEach(function (entry) {
+        const row = document.createElement('div');
+        row.className = 'sheet-row';
+
+        const bar = document.createElement('div');
+        bar.className = 'sheet-row-bar';
+
+        const meta = document.createElement('div');
+        meta.className = 'sheet-row-meta';
+        meta.textContent = '(' + entry.index + ') · ' + (entry.formula.type === 'display' ? '行间' : '行内');
+
+        const actions = document.createElement('div');
+        actions.className = 'sheet-row-actions';
+
+        const jumpBtn = document.createElement('button');
+        jumpBtn.type = 'button';
+        jumpBtn.className = 'sheet-action-btn';
+        jumpBtn.textContent = '定位 ↵';
+        jumpBtn.addEventListener('click', function () {
+          closeFormulaSheet();
+          entry.span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          entry.span.classList.remove('eq-highlight');
+          void entry.span.offsetWidth;
+          entry.span.classList.add('eq-highlight');
+        });
+
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'sheet-action-btn primary';
+        copyBtn.textContent = '复制 LaTeX';
+
+        function copyEntry(event) {
+          if (hasActiveSelection()) return;
+          copyFormula(entry.formula, !!(event && event.shiftKey));
+          copyBtn.textContent = '已复制 ✓';
+          row.classList.add('is-copied');
+          setTimeout(function () {
+            copyBtn.textContent = '复制 LaTeX';
+            row.classList.remove('is-copied');
+          }, 1100);
+        }
+
+        copyBtn.addEventListener('click', copyEntry);
+
+        actions.appendChild(jumpBtn);
+        actions.appendChild(copyBtn);
+        bar.appendChild(meta);
+        bar.appendChild(actions);
+
+        const eqBox = document.createElement('div');
+        eqBox.className = 'sheet-eq-box';
+        eqBox.title = '点击复制公式（Shift+点击复制纯源码）';
+        eqBox.addEventListener('click', copyEntry);
+        renderPreview(eqBox, {
+          source: entry.formula.source,
+          type: entry.formula.type
+        });
+
+        row.appendChild(bar);
+        row.appendChild(eqBox);
+        list.appendChild(row);
+      });
+
+      sec.appendChild(list);
+      frag.appendChild(sec);
+    });
+
+    els.formulaSheetBody.appendChild(frag);
+    els.formulaSheetModal.hidden = false;
   }
 
   function appendFormattedLine(parent, line, transform) {
@@ -955,7 +1123,19 @@
     return body;
   }
 
-  function markdownCellText(cell) {
+  function formatDocFormulaSpan(span, lookup, forceInline) {
+    const source = span.getAttribute('data-source') || '';
+    if (!source) return '';
+    const rawType = span.getAttribute('data-type') === 'display' ? 'display' : 'inline';
+    const resolved = resolveDocFormula(lookup, source, rawType);
+    const targetFormula = forceInline
+      ? Object.assign({}, resolved, { type: 'inline' })
+      : resolved;
+    return Parser.formatFormula(targetFormula, state.format);
+  }
+
+  function markdownCellText(cell, lookup) {
+    const activeLookup = lookup || buildDocLookup();
     let out = '';
     Array.from(cell.childNodes).forEach(function (node) {
       if (node.nodeType === 3) {
@@ -970,7 +1150,7 @@
         return;
       }
       if (node.hasAttribute('data-doc-formula')) {
-        out += '$' + (node.getAttribute('data-source') || '') + '$';
+        out += formatDocFormulaSpan(node, activeLookup, true).replace(/\|/g, '\\|');
         return;
       }
       if (tag === 'CODE') {
@@ -978,28 +1158,29 @@
         return;
       }
       if (tag === 'STRONG' || tag === 'B') {
-        out += '**' + markdownCellText(node) + '**';
+        out += '**' + markdownCellText(node, activeLookup) + '**';
         return;
       }
       if (tag === 'EM' || tag === 'I') {
-        out += '*' + markdownCellText(node) + '*';
+        out += '*' + markdownCellText(node, activeLookup) + '*';
         return;
       }
       if (tag === 'A') {
         const href = node.getAttribute('href') || '';
-        out += '[' + markdownCellText(node) + '](' + href + ')';
+        out += '[' + markdownCellText(node, activeLookup) + '](' + href + ')';
         return;
       }
-      out += markdownCellText(node);
+      out += markdownCellText(node, activeLookup);
     });
     return out.replace(/[ \t\r\n]+/g, ' ').trim();
   }
 
-  function tableToMarkdown(table) {
+  function tableToMarkdown(table, lookup) {
+    const activeLookup = lookup || buildDocLookup();
     const matrix = Array.from(table.rows).map(function (row) {
       return Array.from(row.cells).map(function (cell) {
         return {
-          text: markdownCellText(cell),
+          text: markdownCellText(cell, activeLookup),
           align: (cell.getAttribute('data-align') || '').toLowerCase()
         };
       });
@@ -1026,6 +1207,249 @@
       lines.push(rowText(cells));
     });
     return lines.join('\n');
+  }
+
+  function serializeDocNode(node, lookup, context) {
+    if (node.nodeType === 3) {
+      return node.nodeValue || '';
+    }
+    if (node.nodeType !== 1) return '';
+
+    if (
+      node.classList &&
+      (node.classList.contains('doc-table-copy') || node.classList.contains('doc-note'))
+    ) {
+      return '';
+    }
+
+    const tag = node.tagName.toUpperCase();
+    if (tag === 'BR') return '\n';
+    if (tag === 'HR') return '\n\n---\n\n';
+
+    if (node.hasAttribute('data-doc-formula')) {
+      const inPre = !!(context && context.inPre);
+      const formatted = formatDocFormulaSpan(node, lookup, inPre);
+      if (!formatted) return '';
+      const isDisplay = node.getAttribute('data-type') === 'display' && !inPre;
+      return isDisplay ? '\n\n' + formatted + '\n\n' : formatted;
+    }
+
+    if (node.classList && node.classList.contains('katex-display')) {
+      const tex = node.querySelector('annotation[encoding*="x-tex"]');
+      if (!tex || !tex.textContent) return '';
+      return '\n\n' + Parser.formatFormula({
+        source: tex.textContent.trim(),
+        originalSource: tex.textContent.trim(),
+        type: 'display',
+        wrapper: 'double',
+        origin: 'text'
+      }, state.format) + '\n\n';
+    }
+
+    if (node.classList && node.classList.contains('katex')) {
+      const tex = node.querySelector('annotation[encoding*="x-tex"]');
+      if (!tex || !tex.textContent) return '';
+      return Parser.formatFormula({
+        source: tex.textContent.trim(),
+        originalSource: tex.textContent.trim(),
+        type: 'inline',
+        wrapper: 'dollar',
+        origin: 'text'
+      }, state.format);
+    }
+
+    if (tag === 'TABLE') {
+      const md = tableToMarkdown(node, lookup);
+      return md ? '\n\n' + md + '\n\n' : '';
+    }
+
+    if (tag === 'PRE') {
+      const codeEl = node.querySelector('code') || node;
+      const raw = Array.from(codeEl.childNodes)
+        .map(function (child) { return serializeDocNode(child, lookup, { inPre: true }); })
+        .join('')
+        .replace(/\n+$/, '');
+      return '\n\n```\n' + raw + '\n```\n\n';
+    }
+
+    if (tag === 'CODE') {
+      return '`' + (node.textContent || '') + '`';
+    }
+
+    if (tag === 'STRONG' || tag === 'B') {
+      const inner = Array.from(node.childNodes)
+        .map(function (child) { return serializeDocNode(child, lookup, context); })
+        .join('');
+      return inner ? '**' + inner + '**' : '';
+    }
+
+    if (tag === 'EM' || tag === 'I') {
+      const inner = Array.from(node.childNodes)
+        .map(function (child) { return serializeDocNode(child, lookup, context); })
+        .join('');
+      return inner ? '*' + inner + '*' : '';
+    }
+
+    if (tag === 'A') {
+      const inner = Array.from(node.childNodes)
+        .map(function (child) { return serializeDocNode(child, lookup, context); })
+        .join('');
+      const href = node.getAttribute('href') || '';
+      return href ? '[' + inner + '](' + href + ')' : inner;
+    }
+
+    if (tag === 'OL') {
+      const startNum = parseInt(node.getAttribute('start') || '1', 10);
+      let idx = Number.isFinite(startNum) ? startNum : 1;
+      const items = [];
+      Array.from(node.children).forEach(function (child) {
+        if (child.tagName.toUpperCase() !== 'LI') return;
+        const text = Array.from(child.childNodes)
+          .map(function (c) { return serializeDocNode(c, lookup, context); })
+          .join('')
+          .trim();
+        items.push(String(idx++) + '. ' + text);
+      });
+      return items.length ? '\n\n' + items.join('\n') + '\n\n' : '';
+    }
+
+    if (tag === 'UL') {
+      const items = [];
+      Array.from(node.children).forEach(function (child) {
+        if (child.tagName.toUpperCase() !== 'LI') return;
+        const text = Array.from(child.childNodes)
+          .map(function (c) { return serializeDocNode(c, lookup, context); })
+          .join('')
+          .trim();
+        items.push('- ' + text);
+      });
+      return items.length ? '\n\n' + items.join('\n') + '\n\n' : '';
+    }
+
+    if (tag === 'LI') {
+      const text = Array.from(node.childNodes)
+        .map(function (c) { return serializeDocNode(c, lookup, context); })
+        .join('')
+        .trim();
+      return '\n- ' + text;
+    }
+
+    if (tag === 'TR') {
+      const cells = Array.from(node.children).map(function (c) {
+        return markdownCellText(c, lookup);
+      });
+      return cells.length ? '\n| ' + cells.join(' | ') + ' |' : '';
+    }
+
+    const childrenText = Array.from(node.childNodes)
+      .map(function (child) { return serializeDocNode(child, lookup, context); })
+      .join('');
+
+    const headingMatch = /^H([1-6])$/.exec(tag);
+    if (headingMatch) {
+      const level = parseInt(headingMatch[1], 10);
+      return '\n\n' + '#'.repeat(level) + ' ' + childrenText.trim() + '\n\n';
+    }
+
+    if (tag === 'BLOCKQUOTE') {
+      const quoted = childrenText
+        .trim()
+        .split('\n')
+        .map(function (line) { return line.trim() ? '> ' + line : '>'; })
+        .join('\n');
+      return '\n\n' + quoted + '\n\n';
+    }
+
+    if (/^(P|DIV|SECTION|ARTICLE|FIGURE|DETAILS|SUMMARY)$/.test(tag)) {
+      return '\n\n' + childrenText.trim() + '\n\n';
+    }
+
+    return childrenText;
+  }
+
+  function serializeDocFragment(fragment, lookup) {
+    const activeLookup = lookup || buildDocLookup();
+    const raw = Array.from(fragment.childNodes)
+      .map(function (child) { return serializeDocNode(child, activeLookup, {}); })
+      .join('');
+    return raw
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function findOuterDocFormula(node) {
+    const el = node && node.nodeType === 1 ? node : (node && node.parentElement ? node.parentElement : null);
+    if (!el || !el.closest) return null;
+    return el.closest('[data-doc-formula]') || el.closest('.katex-display') || el.closest('.katex');
+  }
+
+  function handleDocCopy(event) {
+    if (!window.getSelection || !event.clipboardData) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+    if (!els.docView.contains(range.commonAncestorContainer)) return;
+
+    const expanded = range.cloneRange();
+    const startFormula = findOuterDocFormula(expanded.startContainer);
+    if (startFormula && els.docView.contains(startFormula)) {
+      expanded.setStartBefore(startFormula);
+    }
+    const endFormula = findOuterDocFormula(expanded.endContainer);
+    if (endFormula && els.docView.contains(endFormula)) {
+      expanded.setEndAfter(endFormula);
+    }
+
+    const fragment = expanded.cloneContents();
+    const hasFormula = !!fragment.querySelector('[data-doc-formula], .katex, .katex-display');
+    const hasTable = !!fragment.querySelector('table, .doc-table, .doc-table-copy');
+    if (!hasFormula && !hasTable) return;
+
+    const cleaned = serializeDocFragment(fragment, buildDocLookup());
+    if (!cleaned) return;
+
+    event.preventDefault();
+    event.clipboardData.setData('text/plain', cleaned);
+    showToast(hasFormula ? '已复制选中内容（含 LaTeX 公式）' : '已复制选中内容（含表格）');
+  }
+
+  function copyDocMarkdown() {
+    if (!state.input.trim()) {
+      showToast('还没有可复制的内容', true);
+      return;
+    }
+
+    let body = els.docView.querySelector('.doc-body');
+    if (!body) {
+      if (state.lastPasteHtml && state.lastPasteText === state.input) {
+        body = buildDocFromHtml(state.lastPasteHtml);
+      }
+      if (!body) body = buildDocFromText(state.input);
+    }
+
+    if (!body) {
+      showToast('没有可复制的内容', true);
+      return;
+    }
+
+    const text = serializeDocFragment(body, buildDocLookup());
+    if (!text) {
+      showToast('没有可复制的内容', true);
+      return;
+    }
+
+    copyText(text).then(function (copied) {
+      showToast(
+        copied
+          ? '已复制全文 · ' + (FORMAT_LABELS[state.format] || FORMAT_LABELS.markdown)
+          : '复制失败，请手动选择复制',
+        !copied
+      );
+    }).catch(function () {
+      showToast('复制失败，请手动选择复制', true);
+    });
   }
 
   function setupDocTables(body) {
@@ -1087,7 +1511,11 @@
 
   function renderDoc() {
     els.docView.replaceChildren();
-    if (!state.input.trim()) return;
+    docFormulaEntries = [];
+    if (!state.input.trim()) {
+      updateFormulaSheetButton();
+      return;
+    }
 
     let body = null;
     if (state.lastPasteHtml && state.lastPasteText === state.input) {
@@ -1126,7 +1554,8 @@
 
   function updateDocTip() {
     const label = FORMAT_LABELS[state.format] || FORMAT_LABELS.markdown;
-    els.docTip.textContent = '点击公式复制公式 · 点击表格复制整个表格 · 当前格式：' + label;
+    els.docTip.textContent =
+      '点击公式复制（Shift+点击纯源码） · 划选跨文本与公式可直接 Ctrl+C · 按 f 打开公式速览 · 当前格式：' + label;
     els.docTip.hidden = state.view !== 'doc' || !state.input.trim();
   }
 
@@ -1197,6 +1626,12 @@
       saveState();
     });
 
+    previewEl.title = '点击复制公式（Shift+点击复制纯源码）';
+    previewEl.addEventListener('click', function (event) {
+      if (hasActiveSelection()) return;
+      copyFormula(formula, event.shiftKey);
+    });
+
     copyButton.addEventListener('click', function () { copyFormula(formula, false); });
     rawButton.addEventListener('click', function () { copyFormula(formula, true); });
 
@@ -1229,6 +1664,8 @@
     els.searchInput.closest('.search-box').hidden = isDoc;
     els.docView.hidden = !isDoc;
     els.results.hidden = isDoc;
+    if (els.copyDocBtn) els.copyDocBtn.hidden = !state.input.trim();
+    updateFormulaSheetButton();
     updateDocTip();
   }
 
@@ -1575,6 +2012,16 @@
       updateDocTip();
     });
 
+    els.docView.addEventListener('copy', handleDocCopy);
+    if (els.copyDocBtn) els.copyDocBtn.addEventListener('click', copyDocMarkdown);
+    if (els.formulaSheetBtn) els.formulaSheetBtn.addEventListener('click', openFormulaSheet);
+    if (els.formulaSheetClose) els.formulaSheetClose.addEventListener('click', closeFormulaSheet);
+    if (els.formulaSheetModal) {
+      els.formulaSheetModal.addEventListener('click', function (event) {
+        if (event.target === els.formulaSheetModal) closeFormulaSheet();
+      });
+    }
+
     els.copyAllBtn.addEventListener('click', copyAll);
     els.exportBtn.addEventListener('click', exportMarkdown);
     els.themeToggle.addEventListener('click', toggleTheme);
@@ -1582,6 +2029,28 @@
     document.addEventListener('paste', handlePaste);
 
     document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && els.formulaSheetModal && !els.formulaSheetModal.hidden) {
+        closeFormulaSheet();
+        return;
+      }
+
+      if (
+        event.key &&
+        event.key.toLowerCase() === 'f' &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        const active = document.activeElement;
+        const isEditable = active && active.matches && active.matches('input, textarea, select, [contenteditable="true"]');
+        if (!isEditable && state.view === 'doc' && docFormulaEntries.length > 0) {
+          event.preventDefault();
+          if (els.formulaSheetModal && !els.formulaSheetModal.hidden) closeFormulaSheet();
+          else openFormulaSheet();
+          return;
+        }
+      }
+
       if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return;
       const target = event.target;
       if (target && target.matches && target.matches('.formula-source, .search-box input, select')) return;
