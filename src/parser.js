@@ -295,8 +295,10 @@
     if (!content.trim()) return false;
     if (/\s/.test(text.charAt(open + 1))) return false;
     if (/\s/.test(text.charAt(close - 1))) return false;
-    if (/^[\d.,\s]+$/.test(content)) return false;
+    if (/\d/.test(text.charAt(close + 1))) return false;
+    if (/^[\d.,]+[，。；、]/.test(content)) return false;
     if (/\n[ \t]*\n/.test(content)) return false;
+    if (/\n[ \t]*(?:#{1,6}[ \t]|[-*+][ \t]|\d{1,9}[.)][ \t]|>)/.test(content)) return false;
     return true;
   }
 
@@ -452,9 +454,8 @@
           const content = text.slice(i + 1, candidate);
           if (validInlineMath(text, i, candidate, content)) {
             close = candidate;
-            break;
           }
-          searchFrom = candidate + 1;
+          break;
         }
 
         if (close === -1) {

@@ -2569,8 +2569,10 @@ L^{VF}(\theta)=\mathbb{E}_t\left[\left(V_\theta(s_t)-\hat R_t\right)^2\right].
     if (!content.trim()) return false;
     if (/\s/.test(text.charAt(open + 1))) return false;
     if (/\s/.test(text.charAt(close - 1))) return false;
-    if (/^[\d.,\s]+$/.test(content)) return false;
+    if (/\d/.test(text.charAt(close + 1))) return false;
+    if (/^[\d.,]+[，。；、]/.test(content)) return false;
     if (/\n[ \t]*\n/.test(content)) return false;
+    if (/\n[ \t]*(?:#{1,6}[ \t]|[-*+][ \t]|\d{1,9}[.)][ \t]|>)/.test(content)) return false;
     return true;
   }
 
@@ -2726,9 +2728,8 @@ L^{VF}(\theta)=\mathbb{E}_t\left[\left(V_\theta(s_t)-\hat R_t\right)^2\right].
           const content = text.slice(i + 1, candidate);
           if (validInlineMath(text, i, candidate, content)) {
             close = candidate;
-            break;
           }
-          searchFrom = candidate + 1;
+          break;
         }
 
         if (close === -1) {
@@ -3731,18 +3732,58 @@ L^{VF}(\theta)=\mathbb{E}_t\left[\left(V_\theta(s_t)-\hat R_t\right)^2\right].
   function appendInlineRange(parent, text, start, end, occurrences, transform) {
     let segStart = start;
     let inlineBatch = [];
+    let afterDisplay = false;
+
+    function flushSegment(s, e, batch, trimTrailingNl) {
+      let a = s;
+      let b = e;
+      if (afterDisplay) {
+        while (a < b && (text.charAt(a) === '\r' || text.charAt(a) === '\n')) a++;
+      }
+      if (trimTrailingNl) {
+        while (b > a && (text.charAt(b - 1) === '\r' || text.charAt(b - 1) === '\n' || text.charAt(b - 1) === ' ' || text.charAt(b - 1) === '\t')) {
+          if (text.charAt(b - 1) === '\n') {
+            b--;
+            while (b > a && (text.charAt(b - 1) === '\r' || text.charAt(b - 1) === ' ' || text.charAt(b - 1) === '\t')) b--;
+            break;
+          }
+          b--;
+        }
+      }
+      appendInlineSegment(parent, text, a, b, batch, transform);
+    }
+
     occurrences.forEach(function (occurrence) {
       if (occurrence.start < start || occurrence.end > end) return;
       if (occurrence.type === 'display') {
-        appendInlineSegment(parent, text, segStart, occurrence.start, inlineBatch, transform);
+        flushSegment(segStart, occurrence.start, inlineBatch, true);
         inlineBatch = [];
         parent.appendChild(makeDocFormula(occurrence.source, occurrence.type));
         segStart = occurrence.end;
+        afterDisplay = true;
       } else {
         inlineBatch.push(occurrence);
       }
     });
-    appendInlineSegment(parent, text, segStart, end, inlineBatch, transform);
+    flushSegment(segStart, end, inlineBatch, false);
+  }
+
+  function isInsideOccurrence(pos, occurrences) {
+    for (let i = 0; i < occurrences.length; i++) {
+      if (occurrences[i].start < pos && pos < occurrences[i].end) return true;
+    }
+    return false;
+  }
+
+  function lineIndent(text, line) {
+    let cols = 0;
+    for (let i = line.start; i < line.end; i++) {
+      const ch = text.charAt(i);
+      if (ch === ' ') cols += 1;
+      else if (ch === '\t') cols += 2;
+      else break;
+    }
+    return cols;
   }
 
   function occurrencesInRange(occurrences, start, end) {
@@ -3777,36 +3818,121 @@ L^{VF}(\theta)=\mathbb{E}_t\left[\left(V_\theta(s_t)-\hat R_t\right)^2\right].
     body.appendChild(p);
   }
 
-  function appendListBlock(body, text, start, end, occurrences, ordered) {
-    const crossesLines = occurrences.some(function (occurrence) {
-      return text.slice(occurrence.start, occurrence.end).indexOf('\n') !== -1;
-    });
-    if (crossesLines) return false;
+  function appendListItemContent(item, text, start, end, occurrences, parentIndent) {
+    const lines = getBlockLines(text, start, end);
+    const bulletRe = /^[-*+][ \t]+/;
+    const orderedRe = /^\d{1,9}[.)][ \t]+/;
 
-    const pattern = ordered ? /^\d{1,9}[.)][ \t]+/ : /^[-*+][ \t]+/;
-    const list = document.createElement(ordered ? 'ol' : 'ul');
-    let item = null;
+    let i = 0;
+    let chunkStart = -1;
+    let chunkEnd = -1;
 
-    getBlockLines(text, start, end).forEach(function (line) {
-      const trimmed = trimLine(text, line);
-      if (!trimmed.text) {
-        item = null;
+    function flushChunk() {
+      if (chunkStart === -1 || chunkEnd <= chunkStart) {
+        chunkStart = -1;
+        chunkEnd = -1;
         return;
       }
-      const marker = pattern.exec(trimmed.text);
+      appendInlineRange(item, text, chunkStart, chunkEnd, occurrencesInRange(occurrences, chunkStart, chunkEnd));
+      chunkStart = -1;
+      chunkEnd = -1;
+    }
+
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!isInsideOccurrence(line.start, occurrences)) {
+        const trimmed = trimLine(text, line);
+        const indent = lineIndent(text, line);
+        const isNestedUnordered = indent > parentIndent && bulletRe.test(trimmed.text);
+        const isNestedOrdered = indent > parentIndent && orderedRe.test(trimmed.text);
+
+        if (isNestedUnordered || isNestedOrdered) {
+          flushChunk();
+          const subStart = line.start;
+          const subIndent = indent;
+          const subOrdered = isNestedOrdered;
+          let j = i + 1;
+          while (j < lines.length) {
+            const nextLine = lines[j];
+            if (isInsideOccurrence(nextLine.start, occurrences)) {
+              j++;
+              continue;
+            }
+            const nextTrim = trimLine(text, nextLine);
+            if (!nextTrim.text) break;
+            const nextIndent = lineIndent(text, nextLine);
+            if (nextIndent < subIndent) break;
+            if (nextIndent === subIndent) {
+              const matchesSame = subOrdered ? orderedRe.test(nextTrim.text) : bulletRe.test(nextTrim.text);
+              if (!matchesSame) break;
+            }
+            j++;
+          }
+          const subEnd = lines[j - 1].end;
+          const subOcc = occurrencesInRange(occurrences, subStart, subEnd);
+          if (!appendListBlock(item, text, subStart, subEnd, subOcc, subOrdered)) {
+            appendInlineRange(item, text, subStart, subEnd, subOcc);
+          }
+          i = j;
+          continue;
+        }
+      }
+
+      if (chunkStart === -1) chunkStart = line.start;
+      chunkEnd = line.end;
+      i++;
+    }
+    flushChunk();
+  }
+
+  function appendListBlock(body, text, start, end, occurrences, ordered) {
+    const pattern = ordered ? /^\d{1,9}[.)][ \t]+/ : /^[-*+][ \t]+/;
+    const lines = getBlockLines(text, start, end);
+    if (!lines.length) return false;
+
+    const firstTrimmed = trimLine(text, lines[0]);
+    if (!pattern.test(firstTrimmed.text)) return false;
+    const baseIndent = lineIndent(text, lines[0]);
+
+    const items = [];
+    let current = null;
+
+    lines.forEach(function (line) {
+      if (isInsideOccurrence(line.start, occurrences)) {
+        if (current) current.end = line.end;
+        return;
+      }
+      const trimmed = trimLine(text, line);
+      if (!trimmed.text) return;
+      const indent = lineIndent(text, line);
+      const marker = indent <= baseIndent + 1 ? pattern.exec(trimmed.text) : null;
       if (marker) {
-        item = document.createElement('li');
-        appendInlineRange(item, text, trimmed.start + marker[0].length, trimmed.end, occurrences);
-        list.appendChild(item);
-      } else if (item) {
-        item.appendChild(document.createElement('br'));
-        appendInlineRange(item, text, trimmed.start, trimmed.end, occurrences);
-      } else {
-        item = null;
+        current = {
+          contentStart: trimmed.start + marker[0].length,
+          end: line.end
+        };
+        items.push(current);
+      } else if (current) {
+        current.end = line.end;
       }
     });
 
-    if (!list.children.length) return false;
+    if (!items.length) return false;
+
+    const list = document.createElement(ordered ? 'ol' : 'ul');
+    if (ordered) {
+      const startMatch = /^(\d{1,9})[.)][ \t]+/.exec(firstTrimmed.text);
+      if (startMatch && startMatch[1] !== '1') {
+        list.setAttribute('start', startMatch[1]);
+      }
+    }
+
+    items.forEach(function (entry) {
+      const li = document.createElement('li');
+      appendListItemContent(li, text, entry.contentStart, entry.end, occurrences, baseIndent);
+      list.appendChild(li);
+    });
+
     body.appendChild(list);
     return true;
   }
@@ -3818,20 +3944,40 @@ L^{VF}(\theta)=\mathbb{E}_t\left[\left(V_\theta(s_t)-\hat R_t\right)^2\right].
     if (crossesLines) return false;
 
     const quote = document.createElement('blockquote');
-    let written = 0;
+    const lines = getBlockLines(text, start, end);
+    let currentList = null;
+    let currentP = null;
 
-    getBlockLines(text, start, end).forEach(function (line) {
+    lines.forEach(function (line) {
       const trimmed = trimLine(text, line);
       if (!trimmed.text) return;
       let contentStart = trimmed.start;
       const marker = /^>[ \t]?/.exec(trimmed.text);
       if (marker) contentStart += marker[0].length;
-      if (written > 0) quote.appendChild(document.createElement('br'));
-      appendInlineRange(quote, text, contentStart, trimmed.end, occurrences);
-      written++;
+      const innerText = text.slice(contentStart, trimmed.end);
+      const bullet = /^[ \t]*[-*+][ \t]+/.exec(innerText);
+      if (bullet) {
+        currentP = null;
+        if (!currentList) {
+          currentList = document.createElement('ul');
+          quote.appendChild(currentList);
+        }
+        const li = document.createElement('li');
+        appendInlineRange(li, text, contentStart + bullet[0].length, trimmed.end, occurrences);
+        currentList.appendChild(li);
+      } else {
+        currentList = null;
+        if (!currentP) {
+          currentP = document.createElement('p');
+          quote.appendChild(currentP);
+        } else {
+          currentP.appendChild(document.createElement('br'));
+        }
+        appendInlineRange(currentP, text, contentStart, trimmed.end, occurrences);
+      }
     });
 
-    if (!written) return false;
+    if (!quote.children.length) return false;
     body.appendChild(quote);
     return true;
   }
@@ -3898,9 +4044,14 @@ L^{VF}(\theta)=\mathbb{E}_t\left[\left(V_\theta(s_t)-\hat R_t\right)^2\right].
 
     const heading = /^(#{1,6})[ \t]+/.exec(blockText);
     if (heading) {
+      const lines = getBlockLines(text, start, end);
+      const firstLineEnd = lines.length ? lines[0].end : end;
       const element = document.createElement('h' + heading[1].length);
-      appendInlineRange(element, text, start + heading[0].length, end, local);
+      appendInlineRange(element, text, start + heading[0].length, firstLineEnd, occurrencesInRange(local, start, firstLineEnd));
       body.appendChild(element);
+      if (firstLineEnd < end) {
+        appendBlock(body, text, firstLineEnd + 1, end, local);
+      }
       return;
     }
 
@@ -3928,6 +4079,18 @@ L^{VF}(\theta)=\mathbb{E}_t\left[\left(V_\theta(s_t)-\hat R_t\right)^2\right].
         appendParagraph(body, text, start, end, local);
       }
       return;
+    }
+
+    const blockLines = getBlockLines(text, start, end);
+    for (let li = 1; li < blockLines.length; li++) {
+      const line = blockLines[li];
+      if (isInsideOccurrence(line.start, local)) continue;
+      const trimmed = trimLine(text, line);
+      if (/^(?:#{1,6}[ \t]+|[-*+][ \t]+|\d{1,9}[.)][ \t]+|>[ \t]?|(?:-{3,}|\*{3,}|_{3,})[ \t]*$)/.test(trimmed.text)) {
+        appendParagraph(body, text, start, line.start - 1, occurrencesInRange(local, start, line.start - 1));
+        appendBlock(body, text, line.start, end, local);
+        return;
+      }
     }
 
     appendParagraph(body, text, start, end, local);

@@ -47,7 +47,17 @@ test('ignores escaped dollars', () => {
 test('ignores unclosed currency-like dollars without warning', () => {
   const result = Parser.extractFromText('成本 $5，公式 $x$。');
   assert.equal(result.formulas.length, 1);
+  assert.equal(result.formulas[0].source, 'x');
   assert.equal(result.warnings.length, 0);
+});
+
+test('extracts single-number inline math while ignoring currency ranges', () => {
+  const numeric = Parser.extractFromText('对 $\\theta$ 求导直接为 $0$，全局极小值 $0$，一阶导数必为 $0$。', { dedupe: false });
+  assert.deepEqual(numeric.formulas.map((f) => f.source), ['\\theta', '0', '0', '0']);
+  assert.equal(numeric.warnings.length, 0);
+
+  const currencyRange = Parser.extractFromText('价格在 $5-$10 之间，成本 $5，公式$x$。');
+  assert.deepEqual(currencyRange.formulas.map((f) => f.source), ['x']);
 });
 
 test('skips inline code by default and includes it on request', () => {
