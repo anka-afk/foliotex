@@ -2,7 +2,7 @@
 
 > **AI 回答排印与笔记剪辑台** — 粘贴 AI 回答，以学术纸感排版即时渲染全文、公式与表格，点击或划选即可复制到 Obsidian / Typora 等笔记软件。
 
-在线使用：<https://anka-afk.github.io/foliotex/>
+在线使用：<https://ankaanka.org/foliotex/>
 
 ## 核心特性
 
