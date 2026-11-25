@@ -3,12 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>公式提取器</title>
+  <title>FolioTeX · AI 回答排印与笔记剪辑台</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23b54434'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-family='Georgia,serif' font-weight='700' font-size='21' fill='%23faf8f3'%3EF%3C/text%3E%3C/svg%3E">
   <script>
     (function () {
       var theme = '';
       try {
-        var saved = JSON.parse(localStorage.getItem('formula-extractor:v1') || 'null');
+        var raw = localStorage.getItem('foliotex:v1') || localStorage.getItem('formula-extractor:v1');
+        var saved = JSON.parse(raw || 'null');
         if (saved) theme = saved.theme;
       } catch (error) {
         theme = '';
@@ -25,100 +27,202 @@
 <body>
   <div class="app">
     <header class="app-header">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true">∑</div>
-        <div>
-          <h1>公式提取器</h1>
-          <p>粘贴 AI 回答，全文渲染 · 点击公式或表格复制</p>
+      <div class="header-left">
+        <div class="brand">
+          <div class="brand-seal" aria-hidden="true">F</div>
+          <div class="brand-text">
+            <h1>FolioTeX</h1>
+            <span class="brand-sub">AI 回答排印与笔记剪辑台</span>
+          </div>
+        </div>
+        <span class="header-divider" aria-hidden="true"></span>
+        <button type="button" id="toggleInputBtn" class="btn subtle icon-label" title="收起或展开输入栏（快捷键 \）" aria-label="收起或展开输入栏" aria-pressed="false">
+          <svg class="ico" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="2.25" y="3" width="13.5" height="12" rx="2"/>
+            <line x1="7" y1="3" x2="7" y2="15"/>
+          </svg>
+          <span class="toggle-input-label">收起输入</span>
+        </button>
+      </div>
+
+      <div class="header-center">
+        <div class="segmented view-switch" id="viewGroup" role="group" aria-label="视图切换">
+          <button type="button" data-view="doc" class="active">
+            <svg class="ico-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3.5 2.5h6l3 3v8a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1Z"/>
+              <path d="M9.5 2.5v3h3"/>
+              <line x1="5.5" y1="8.25" x2="10.5" y2="8.25"/>
+              <line x1="5.5" y1="11" x2="9" y2="11"/>
+            </svg>
+            <span>全文阅读</span>
+          </button>
+          <button type="button" data-view="cards">
+            <svg class="ico-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="2.25" y="2.5" width="11.5" height="4.5" rx="1.2"/>
+              <rect x="2.25" y="9" width="11.5" height="4.5" rx="1.2"/>
+            </svg>
+            <span>公式卡片</span>
+          </button>
         </div>
       </div>
-      <div class="header-actions">
+
+      <div class="header-right">
+        <label class="format-picker" title="复制输出格式">
+          <span class="format-label">输出</span>
+          <select id="formatSelect" class="select" aria-label="复制格式">
+            <option value="markdown">Markdown（$ / $$）</option>
+            <option value="paren">LaTeX 括号（\( / \[）</option>
+            <option value="raw">纯公式（无包装）</option>
+            <option value="original">保持原始包装</option>
+          </select>
+        </label>
+
         <button type="button" id="themeToggle" class="icon-btn" title="切换主题" aria-label="切换主题">
-          <span id="themeIcon">☾</span>
+          <span id="themeIcon" aria-hidden="true"></span>
         </button>
       </div>
     </header>
 
-    <main>
-      <section class="panel input-panel">
-        <div class="panel-head">
-          <div>
-            <h2>AI 回答</h2>
-            <p class="hint">支持纯文本与富文本粘贴 · <kbd>Ctrl</kbd> + <kbd>Enter</kbd> 提取</p>
+    <main id="workbench" class="workbench">
+      <section class="pane input-pane" id="inputPane" aria-label="原文输入区">
+        <div class="pane-bar">
+          <div class="pane-title-group">
+            <h2>原文输入</h2>
+            <span id="inputCount" class="count-pill">0 字符</span>
           </div>
-          <span id="inputCount" class="input-count">0 字符</span>
+          <div class="pane-actions">
+            <button type="button" id="pasteBtn" class="btn tiny ghost" title="从剪贴板粘贴（保留富文本公式注解）">
+              <svg class="ico-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="5" y="2.25" width="6" height="2.5" rx="0.75"/>
+                <path d="M5 3.5H3.75A1.25 1.25 0 0 0 2.5 4.75v8.5a1.25 1.25 0 0 0 1.25 1.25h8.5a1.25 1.25 0 0 0 1.25-1.25v-8.5A1.25 1.25 0 0 0 12.25 3.5H11"/>
+              </svg>
+              <span>粘贴</span>
+            </button>
+            <button type="button" id="exampleBtn" class="btn tiny ghost">示例</button>
+            <button type="button" id="clearBtn" class="btn tiny ghost danger">清空</button>
+          </div>
         </div>
 
-        <textarea id="inputText" class="input-area" spellcheck="false" placeholder="把包含公式或表格的 AI 回答粘贴到这里……&#10;&#10;支持 $...$、$$...$$、\(...\)、\[...\] 和 LaTeX 环境，也支持 Markdown 表格。"></textarea>
-
-        <div class="input-actions">
-          <button type="button" id="extractBtn" class="btn primary">提取公式</button>
-          <button type="button" id="pasteBtn" class="btn">从剪贴板粘贴</button>
-          <span class="action-spacer"></span>
-          <label class="check"><input type="checkbox" id="includeCode"> 包含代码块中的公式</label>
-          <label class="check"><input type="checkbox" id="dedupe" checked> 自动去重</label>
-          <button type="button" id="exampleBtn" class="btn ghost">载入示例</button>
-          <button type="button" id="clearBtn" class="btn ghost danger">清空</button>
+        <div class="editor-wrap">
+          <textarea id="inputText" class="input-area" spellcheck="false" placeholder="在此粘贴包含公式或表格的 AI 回答……&#10;&#10;• 粘贴即自动渲染，支持纯文本与网页富文本&#10;• 支持 $...$、$$...$$、\(...\)、\[...\] 与 LaTeX 环境&#10;• 支持 Markdown 表格渲染与一键复制"></textarea>
         </div>
 
         <div id="notice" class="notice" hidden></div>
+
+        <div class="pane-foot">
+          <div class="foot-options">
+            <label class="check" title="同时提取代码块中的公式">
+              <input type="checkbox" id="includeCode">
+              <span>含代码块</span>
+            </label>
+            <label class="check" title="在卡片视图中自动合并重复公式">
+              <input type="checkbox" id="dedupe" checked>
+              <span>自动去重</span>
+            </label>
+          </div>
+          <div class="foot-actions">
+            <button type="button" id="extractBtn" class="btn tiny accent-soft" title="重新解析与渲染（Ctrl + Enter）">
+              <span>刷新渲染</span>
+              <kbd>Ctrl↵</kbd>
+            </button>
+          </div>
+        </div>
       </section>
 
-      <section class="panel results-panel" id="resultsPanel">
-        <div class="results-head">
-          <div class="results-title">
-            <h2>提取结果</h2>
-            <span id="stats" class="stats">等待提取</span>
+      <div id="splitResizer" class="split-resizer" role="separator" aria-orientation="vertical" aria-label="拖拽调整左右栏宽度" title="拖拽调整宽度 · 双击重置"></div>
+
+      <section class="pane results-pane" id="resultsPanel" aria-label="排版预览区">
+        <div class="pane-bar results-bar">
+          <div class="pane-title-group">
+            <span id="stats" class="stats">等待输入</span>
           </div>
 
           <div class="results-tools">
-            <div class="segmented" id="viewGroup" role="group" aria-label="视图切换">
-              <button type="button" data-view="doc" class="active">全文</button>
-              <button type="button" data-view="cards">卡片</button>
-            </div>
-
-            <div class="segmented" id="filterGroup" role="group" aria-label="公式类型筛选">
+            <div class="segmented compact" id="filterGroup" role="group" aria-label="公式类型筛选">
               <button type="button" data-filter="all" class="active">全部</button>
               <button type="button" data-filter="inline">行内</button>
               <button type="button" data-filter="display">行间</button>
             </div>
 
             <label class="search-box">
-              <span aria-hidden="true">⌕</span>
-              <input id="searchInput" type="search" placeholder="搜索公式…" aria-label="搜索公式">
+              <svg class="ico-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="7.25" cy="7.25" r="4.5"/>
+                <line x1="10.6" y1="10.6" x2="13.75" y2="13.75"/>
+              </svg>
+              <input id="searchInput" type="search" placeholder="筛选源码…" aria-label="搜索公式">
             </label>
 
-            <select id="formatSelect" class="select" title="复制格式" aria-label="复制格式">
-              <option value="markdown">Markdown（$ / $$）</option>
-              <option value="paren">LaTeX 括号（\( / \[）</option>
-              <option value="raw">纯公式（无包装）</option>
-              <option value="original">保持原始包装</option>
-            </select>
+            <button type="button" id="formulaSheetBtn" class="btn tiny ghost" title="查看并定位全篇公式（快捷键 F）" hidden>
+              <svg class="ico-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="3" y1="4.25" x2="13" y2="4.25"/>
+                <line x1="3" y1="8" x2="10.5" y2="8"/>
+                <line x1="3" y1="11.75" x2="12" y2="11.75"/>
+              </svg>
+              <span id="formulaSheetBtnLabel">公式速览</span>
+              <kbd>F</kbd>
+            </button>
 
-            <button type="button" id="formulaSheetBtn" class="btn ghost" title="查看并定位全篇公式（快捷键 f）" hidden>公式速览</button>
-            <button type="button" id="copyDocBtn" class="btn" title="复制清洗后的完整 Markdown（含公式与表格）">复制全文</button>
-            <button type="button" id="copyAllBtn" class="btn">复制全部公式</button>
-            <button type="button" id="exportBtn" class="btn ghost">导出 .md</button>
+            <button type="button" id="copyDocBtn" class="btn tiny primary" title="复制清洗后的完整 Markdown（含公式与表格）">
+              <svg class="ico-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="5.25" y="5.25" width="8" height="8.5" rx="1.4"/>
+                <path d="M10.75 5.25V3.75a1.4 1.4 0 0 0-1.4-1.4H3.9a1.4 1.4 0 0 0-1.4 1.4v5.7a1.4 1.4 0 0 0 1.4 1.4h1.35"/>
+              </svg>
+              <span>复制全文</span>
+            </button>
+
+            <button type="button" id="copyAllBtn" class="btn tiny primary" title="按当前格式复制全部公式">
+              <svg class="ico-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="5.25" y="5.25" width="8" height="8.5" rx="1.4"/>
+                <path d="M10.75 5.25V3.75a1.4 1.4 0 0 0-1.4-1.4H3.9a1.4 1.4 0 0 0-1.4 1.4v5.7a1.4 1.4 0 0 0 1.4 1.4h1.35"/>
+              </svg>
+              <span>复制全部公式</span>
+            </button>
+
+            <button type="button" id="exportBtn" class="btn tiny ghost" title="导出所有公式为 Markdown 文件">
+              <svg class="ico-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 2.5v7.5"/>
+                <path d="M5 7.25 8 10.25 11 7.25"/>
+                <path d="M2.75 11.75v1a1 1 0 0 0 1 1h8.5a1 1 0 0 0 1-1v-1"/>
+              </svg>
+              <span>导出 .md</span>
+            </button>
           </div>
         </div>
 
-        <p id="docTip" class="doc-tip" hidden>点击任意公式即可复制</p>
-        <div id="docView" class="doc-view" hidden></div>
-        <div id="results" class="results"></div>
+        <div class="results-scroll" id="resultsScroll">
+          <div id="docView" class="doc-view" hidden></div>
+          <div id="results" class="results"></div>
 
-        <div id="emptyState" class="empty-state">
-          <div class="empty-mark" aria-hidden="true">∑</div>
-          <h3>还没有内容</h3>
-          <p>粘贴一段包含 LaTeX 公式或 Markdown 表格的 AI 回答，整段内容会在这里渲染，点公式或表格就能复制。</p>
-          <button type="button" id="emptyExampleBtn" class="btn">载入示例</button>
+          <div id="emptyState" class="empty-state">
+            <div class="empty-sheet">
+              <div class="empty-mark" aria-hidden="true">F</div>
+              <h3>粘贴 AI 回答，即刻排印成稿</h3>
+              <p>完整保留段落、标题、代码块与 Markdown 表格；点击任意公式或表格即可按 Obsidian / Typora 格式复制。</p>
+              <div class="empty-actions">
+                <button type="button" id="emptyPasteBtn" class="btn primary">
+                  <svg class="ico-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="5" y="2.25" width="6" height="2.5" rx="0.75"/>
+                    <path d="M5 3.5H3.75A1.25 1.25 0 0 0 2.5 4.75v8.5a1.25 1.25 0 0 0 1.25 1.25h8.5a1.25 1.25 0 0 0 1.25-1.25v-8.5A1.25 1.25 0 0 0 12.25 3.5H11"/>
+                  </svg>
+                  <span>从剪贴板粘贴</span>
+                </button>
+                <button type="button" id="emptyExampleBtn" class="btn">载入示例文档</button>
+              </div>
+              <ul class="empty-features">
+                <li><strong>点按即取</strong><span>点击公式复制 LaTeX，Shift + 点击复制纯源码</span></li>
+                <li><strong>智能划选</strong><span>跨段落、公式与表格划选 Ctrl+C 自动还原源码</span></li>
+                <li><strong>全篇速览</strong><span>按 <kbd>F</kbd> 唤出公式目录，快速定位与复制</span></li>
+              </ul>
+            </div>
+          </div>
         </div>
+
+        <footer class="status-bar">
+          <span id="docTip" class="status-tip">所有内容仅在本地浏览器处理，不会上传</span>
+          <span class="status-meta">本地离线 · KaTeX 渲染</span>
+        </footer>
       </section>
     </main>
-
-    <footer class="footer">
-      <span>所有内容只在本地浏览器处理，不会上传。</span>
-      <span>公式预览由 KaTeX 渲染。</span>
-    </footer>
   </div>
 
   <template id="cardTemplate">
@@ -129,15 +233,19 @@
           <span class="badge type-badge"></span>
           <span class="badge origin-badge" hidden></span>
           <span class="wrapper-label"></span>
+          <span class="edited-dot" hidden title="源码已修改">已编辑</span>
         </div>
         <div class="card-actions">
-          <button type="button" class="btn tiny copy-raw" title="复制不带分隔符的 LaTeX 源码">源码</button>
-          <button type="button" class="btn tiny primary copy-one" title="按当前格式复制">复制</button>
+          <button type="button" class="btn tiny ghost toggle-edit" title="展开或收起源码编辑">编辑</button>
+          <button type="button" class="btn tiny ghost copy-raw" title="复制不带分隔符的 LaTeX 源码">源码</button>
+          <button type="button" class="btn tiny accent-soft copy-one" title="按当前格式复制">复制</button>
         </div>
       </div>
       <p class="formula-context" hidden></p>
       <div class="formula-preview" aria-live="polite"></div>
-      <textarea class="formula-source" spellcheck="false" rows="2" aria-label="公式 LaTeX 源码"></textarea>
+      <div class="card-source-wrap" hidden>
+        <textarea class="formula-source" spellcheck="false" rows="2" aria-label="公式 LaTeX 源码"></textarea>
+      </div>
     </article>
   </template>
 
@@ -149,8 +257,13 @@
           <span id="formulaSheetSubtitle" class="sheet-subtitle"></span>
         </div>
         <div class="sheet-head-actions">
-          <span class="sheet-shortcut">按 <kbd>f</kbd> 开关 · <kbd>Esc</kbd> 关闭</span>
-          <button type="button" id="formulaSheetClose" class="btn tiny ghost" aria-label="关闭公式速览">关闭</button>
+          <span class="sheet-shortcut"><kbd>F</kbd> 开关 · <kbd>Esc</kbd> 关闭</span>
+          <button type="button" id="formulaSheetClose" class="icon-btn tiny-icon" aria-label="关闭公式速览" title="关闭（Esc）">
+            <svg class="ico-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+              <line x1="4" y1="4" x2="12" y2="12"/>
+              <line x1="12" y1="4" x2="4" y2="12"/>
+            </svg>
+          </button>
         </div>
       </div>
       <div id="formulaSheetBody" class="sheet-body"></div>
@@ -159,7 +272,9 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script type="text/plain" id="exampleText">在 PPO 中，策略梯度的目标是最大化
+  <script type="text/plain" id="exampleText">## 近端策略优化（PPO）核心目标
+
+在强化学习中，策略梯度的目标是最大化期望累计回报：
 
 \[
 J(\theta)=\mathbb{E}_{\tau\sim\pi_\theta}\left[\sum_{t=0}^{T} r_t\right]
@@ -167,27 +282,29 @@ J(\theta)=\mathbb{E}_{\tau\sim\pi_\theta}\left[\sum_{t=0}^{T} r_t\right]
 
 其中重要性采样比定义为 $r_t(\theta)=\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)}$。
 
-裁剪后的替代目标为
+裁剪后的替代目标函数为：
 
 $$
 L^{\mathrm{CLIP}}(\theta)=\mathbb{E}_{t}\left[\min\left(r_t(\theta)\hat A_t,\ \operatorname{clip}(r_t(\theta),1-\epsilon,1+\epsilon)\hat A_t\right)\right]
 $$
 
-对于离散动作，优势函数可以写成
+### 广义优势估计（GAE）
+
+对于离散动作，优势函数与时序差分误差可写为：
 
 \begin{align}
 \hat A_t &= \sum_{l=0}^{T-t} (\gamma\lambda)^l \delta_{t+l}, \\
 \delta_t &= r_t + \gamma V(s_{t+1}) - V(s_t).
 \end{align}
 
-常见方法对比如下：
+常见对齐方法对比如下：
 
-| 方法 | 目标函数 | 是否在线 |
+| 方法 | 核心目标函数 | 是否在线策略 |
 | :--- | :---: | ---: |
-| PPO | $L^{\mathrm{CLIP}}(\theta)$ | 是 |
-| DPO | $\mathcal{L}_{\mathrm{DPO}}(\theta)$ | 否 |
+| **PPO** | $L^{\mathrm{CLIP}}(\theta)$ | 是 |
+| **DPO** | $\mathcal{L}_{\mathrm{DPO}}(\theta)$ | 否 |
 
-价值网络的损失为
+价值网络的均方误差损失为：
 
 \[
 L^{VF}(\theta)=\mathbb{E}_t\left[\left(V_\theta(s_t)-\hat R_t\right)^2\right].

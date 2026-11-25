@@ -2,16 +2,23 @@
   'use strict';
 
   const Parser = window.FormulaParser;
-  const STORAGE_KEY = 'formula-extractor:v1';
-  const PASTE_CACHE_KEY = 'formula-extractor:paste:v1';
+  const STORAGE_KEY = 'foliotex:v1';
+  const LEGACY_STORAGE_KEY = 'formula-extractor:v1';
+  const PASTE_CACHE_KEY = 'foliotex:paste:v1';
+  const LEGACY_PASTE_CACHE_KEY = 'formula-extractor:paste:v1';
   const PASTE_CACHE_LIMIT = 1500000;
   const FORMATS = ['markdown', 'paren', 'raw', 'original'];
 
   const els = {
+    workbench: document.getElementById('workbench'),
+    inputPane: document.getElementById('inputPane'),
+    splitResizer: document.getElementById('splitResizer'),
+    toggleInputBtn: document.getElementById('toggleInputBtn'),
     inputText: document.getElementById('inputText'),
     inputCount: document.getElementById('inputCount'),
     extractBtn: document.getElementById('extractBtn'),
     pasteBtn: document.getElementById('pasteBtn'),
+    emptyPasteBtn: document.getElementById('emptyPasteBtn'),
     exampleBtn: document.getElementById('exampleBtn'),
     emptyExampleBtn: document.getElementById('emptyExampleBtn'),
     clearBtn: document.getElementById('clearBtn'),
@@ -29,6 +36,7 @@
     searchInput: document.getElementById('searchInput'),
     formatSelect: document.getElementById('formatSelect'),
     formulaSheetBtn: document.getElementById('formulaSheetBtn'),
+    formulaSheetBtnLabel: document.getElementById('formulaSheetBtnLabel'),
     copyDocBtn: document.getElementById('copyDocBtn'),
     copyAllBtn: document.getElementById('copyAllBtn'),
     exportBtn: document.getElementById('exportBtn'),
@@ -54,6 +62,8 @@
     includeCode: false,
     dedupe: true,
     theme: '',
+    inputCollapsed: false,
+    splitWidth: 39,
     lastPasteHtml: '',
     lastPasteText: ''
   };
@@ -80,7 +90,8 @@
   function loadState() {
     let saved = null;
     try {
-      saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+      const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
+      saved = JSON.parse(raw || 'null');
     } catch (error) {
       saved = null;
     }
@@ -101,8 +112,17 @@
       state.theme = saved.theme;
     }
 
+    if (typeof saved.inputCollapsed === 'boolean') {
+      state.inputCollapsed = saved.inputCollapsed;
+    }
+
+    if (typeof saved.splitWidth === 'number' && Number.isFinite(saved.splitWidth)) {
+      state.splitWidth = Math.min(62, Math.max(24, saved.splitWidth));
+    }
+
     try {
-      const cached = JSON.parse(sessionStorage.getItem(PASTE_CACHE_KEY) || 'null');
+      const rawPaste = sessionStorage.getItem(PASTE_CACHE_KEY) || sessionStorage.getItem(LEGACY_PASTE_CACHE_KEY);
+      const cached = JSON.parse(rawPaste || 'null');
       if (cached && cached.text === state.input && typeof cached.html === 'string') {
         state.lastPasteHtml = cached.html;
         state.lastPasteText = cached.text;
@@ -136,7 +156,9 @@
           view: state.view,
           includeCode: state.includeCode,
           dedupe: state.dedupe,
-          theme: state.theme
+          theme: state.theme,
+          inputCollapsed: state.inputCollapsed,
+          splitWidth: state.splitWidth
         }));
       } catch (error) {
         // A very large clipboard can exceed the localStorage quota.
@@ -148,13 +170,74 @@
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
 
+  const ICON_SUN = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="3.4"/><line x1="9" y1="2" x2="9" y2="3.4"/><line x1="9" y1="14.6" x2="9" y2="16"/><line x1="2" y1="9" x2="3.4" y2="9"/><line x1="14.6" y1="9" x2="16" y2="9"/><line x1="4.05" y1="4.05" x2="5.05" y2="5.05"/><line x1="12.95" y1="12.95" x2="13.95" y2="13.95"/><line x1="13.95" y1="4.05" x2="12.95" y2="5.05"/><line x1="5.05" y1="12.95" x2="4.05" y2="13.95"/></svg>';
+  const ICON_MOON = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.6 10.65A5.85 5.85 0 0 1 7.35 3.4 5.95 5.95 0 1 0 14.6 10.65Z"/></svg>';
+
   function applyTheme(theme) {
     const resolved = theme === 'dark' ? 'dark' : 'light';
     state.theme = resolved;
     document.documentElement.dataset.theme = resolved;
-    els.themeIcon.textContent = resolved === 'dark' ? '☀' : '☾';
-    els.themeToggle.setAttribute('aria-label', resolved === 'dark' ? '切换到浅色主题' : '切换到深色主题');
-    els.themeToggle.title = resolved === 'dark' ? '切换到浅色主题' : '切换到深色主题';
+    els.themeIcon.innerHTML = resolved === 'dark' ? ICON_SUN : ICON_MOON;
+    els.themeToggle.setAttribute('aria-label', resolved === 'dark' ? '切换到浅色纸面' : '切换到深色书房');
+    els.themeToggle.title = resolved === 'dark' ? '切换到浅色纸面' : '切换到深色书房';
+  }
+
+  function applySplitWidth(percent) {
+    const clamped = Math.min(62, Math.max(24, Number(percent) || 39));
+    state.splitWidth = clamped;
+    document.documentElement.style.setProperty('--split-width', clamped.toFixed(2) + '%');
+  }
+
+  function applyInputCollapsed(collapsed) {
+    state.inputCollapsed = !!collapsed;
+    if (els.workbench) {
+      els.workbench.classList.toggle('input-collapsed', state.inputCollapsed);
+    }
+    if (els.toggleInputBtn) {
+      els.toggleInputBtn.setAttribute('aria-pressed', state.inputCollapsed ? 'true' : 'false');
+      const label = els.toggleInputBtn.querySelector('.toggle-input-label');
+      if (label) label.textContent = state.inputCollapsed ? '展开输入' : '收起输入';
+    }
+  }
+
+  function toggleInputPane() {
+    applyInputCollapsed(!state.inputCollapsed);
+    saveState();
+  }
+
+  function initSplitResizer() {
+    if (!els.splitResizer || !els.workbench) return;
+
+    els.splitResizer.addEventListener('pointerdown', function (event) {
+      if (window.innerWidth <= 900 || state.inputCollapsed) return;
+      event.preventDefault();
+      els.workbench.classList.add('is-resizing');
+      els.splitResizer.setPointerCapture(event.pointerId);
+
+      function onMove(moveEvent) {
+        const rect = els.workbench.getBoundingClientRect();
+        if (!rect.width) return;
+        const pct = ((moveEvent.clientX - rect.left) / rect.width) * 100;
+        applySplitWidth(pct);
+      }
+
+      function onUp() {
+        els.workbench.classList.remove('is-resizing');
+        els.splitResizer.removeEventListener('pointermove', onMove);
+        els.splitResizer.removeEventListener('pointerup', onUp);
+        els.splitResizer.removeEventListener('pointercancel', onUp);
+        saveState();
+      }
+
+      els.splitResizer.addEventListener('pointermove', onMove);
+      els.splitResizer.addEventListener('pointerup', onUp);
+      els.splitResizer.addEventListener('pointercancel', onUp);
+    });
+
+    els.splitResizer.addEventListener('dblclick', function () {
+      applySplitWidth(39);
+      saveState();
+    });
   }
 
   function toggleTheme() {
@@ -277,7 +360,7 @@
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'formulas-' + formatFileDate(new Date()) + '.md';
+    link.download = 'foliotex-' + formatFileDate(new Date()) + '.md';
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -496,7 +579,11 @@
     const show = state.view === 'doc' && count > 0;
     els.formulaSheetBtn.hidden = !show;
     if (show) {
-      els.formulaSheetBtn.textContent = '公式速览 (' + count + ')';
+      if (els.formulaSheetBtnLabel) {
+        els.formulaSheetBtnLabel.textContent = '公式速览 (' + count + ')';
+      } else {
+        els.formulaSheetBtn.textContent = '公式速览 (' + count + ')';
+      }
     }
   }
 
@@ -1553,10 +1640,18 @@
   }
 
   function updateDocTip() {
-    const label = FORMAT_LABELS[state.format] || FORMAT_LABELS.markdown;
-    els.docTip.textContent =
-      '点击公式复制（Shift+点击纯源码） · 划选跨文本与公式可直接 Ctrl+C · 按 f 打开公式速览 · 当前格式：' + label;
-    els.docTip.hidden = state.view !== 'doc' || !state.input.trim();
+    if (!els.docTip) return;
+    if (!state.input.trim()) {
+      els.docTip.textContent = '所有内容仅在本地浏览器处理，不会上传';
+      return;
+    }
+    if (state.view === 'doc') {
+      els.docTip.textContent =
+        '点击公式复制（Shift+点击纯源码） · 划选跨块 Ctrl+C · 按 F 速览';
+    } else {
+      els.docTip.textContent =
+        '点击公式预览直接复制 · 点“编辑”修改源码并实时渲染';
+    }
   }
 
   function wrapperLabel(formula) {
@@ -1578,13 +1673,16 @@
     const typeBadge = card.querySelector('.type-badge');
     const originBadge = card.querySelector('.origin-badge');
     const wrapperEl = card.querySelector('.wrapper-label');
+    const editedDot = card.querySelector('.edited-dot');
     const contextEl = card.querySelector('.formula-context');
     const previewEl = card.querySelector('.formula-preview');
+    const sourceWrap = card.querySelector('.card-source-wrap');
     const sourceEl = card.querySelector('.formula-source');
+    const toggleEditBtn = card.querySelector('.toggle-edit');
     const copyButton = card.querySelector('.copy-one');
     const rawButton = card.querySelector('.copy-raw');
 
-    indexEl.textContent = String(index + 1);
+    indexEl.textContent = String(index + 1).padStart(2, '0');
     typeBadge.textContent = formula.type === 'display' ? '行间' : '行内';
     typeBadge.classList.add(formula.type);
 
@@ -1610,14 +1708,34 @@
       contextEl.title = contextParts.join(' ');
     }
 
+    const isEdited = formula.source !== formula.originalSource;
     sourceEl.value = formula.source;
-    sourceEl.classList.toggle('is-edited', formula.source !== formula.originalSource);
+    sourceEl.classList.toggle('is-edited', isEdited);
+    if (editedDot) editedDot.hidden = !isEdited;
+    if (sourceWrap) {
+      sourceWrap.hidden = !isEdited;
+      if (toggleEditBtn) toggleEditBtn.textContent = isEdited ? '收起' : '编辑';
+    }
     renderPreview(previewEl, formula);
+
+    if (toggleEditBtn && sourceWrap) {
+      toggleEditBtn.addEventListener('click', function () {
+        const nextOpen = sourceWrap.hidden;
+        sourceWrap.hidden = !nextOpen;
+        toggleEditBtn.textContent = nextOpen ? '收起' : '编辑';
+        if (nextOpen) {
+          autoSizeSource(sourceEl);
+          sourceEl.focus();
+        }
+      });
+    }
 
     let previewTimer = null;
     sourceEl.addEventListener('input', function () {
       formula.source = sourceEl.value;
-      sourceEl.classList.toggle('is-edited', formula.source !== formula.originalSource);
+      const edited = formula.source !== formula.originalSource;
+      sourceEl.classList.toggle('is-edited', edited);
+      if (editedDot) editedDot.hidden = !edited;
       autoSizeSource(sourceEl);
       clearTimeout(previewTimer);
       previewTimer = setTimeout(function () {
@@ -1657,14 +1775,18 @@
 
   function updateViewControls() {
     const isDoc = state.view === 'doc';
+    const hasContent = !!state.input.trim();
+    const hasFormulas = state.formulas.length > 0;
     els.viewGroup.querySelectorAll('button').forEach(function (button) {
       button.classList.toggle('active', button.dataset.view === state.view);
     });
-    els.filterGroup.hidden = isDoc;
-    els.searchInput.closest('.search-box').hidden = isDoc;
-    els.docView.hidden = !isDoc;
-    els.results.hidden = isDoc;
-    if (els.copyDocBtn) els.copyDocBtn.hidden = !state.input.trim();
+    els.filterGroup.hidden = isDoc || !hasContent;
+    els.searchInput.closest('.search-box').hidden = isDoc || !hasContent;
+    els.docView.hidden = !isDoc || !hasContent;
+    els.results.hidden = isDoc || !hasContent;
+    if (els.copyDocBtn) els.copyDocBtn.hidden = !isDoc || !hasContent;
+    if (els.copyAllBtn) els.copyAllBtn.hidden = isDoc || !hasFormulas;
+    if (els.exportBtn) els.exportBtn.hidden = !hasFormulas;
     updateFormulaSheetButton();
     updateDocTip();
   }
@@ -1797,7 +1919,7 @@
     render();
     saveState();
 
-    if (opts.scroll && state.input.trim()) {
+    if (opts.scroll && state.input.trim() && window.innerWidth <= 900) {
       els.resultsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
     if (!opts.silent) {
@@ -1970,6 +2092,8 @@
 
     els.extractBtn.addEventListener('click', function () { extract({ scroll: true }); });
     els.pasteBtn.addEventListener('click', pasteFromClipboard);
+    if (els.emptyPasteBtn) els.emptyPasteBtn.addEventListener('click', pasteFromClipboard);
+    if (els.toggleInputBtn) els.toggleInputBtn.addEventListener('click', toggleInputPane);
     els.exampleBtn.addEventListener('click', loadExample);
     els.emptyExampleBtn.addEventListener('click', loadExample);
     els.clearBtn.addEventListener('click', clearAll);
@@ -2035,6 +2159,21 @@
       }
 
       if (
+        event.key === '\\' &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        const active = document.activeElement;
+        const isEditable = active && active.matches && active.matches('input, textarea, select, [contenteditable="true"]');
+        if (!isEditable && window.innerWidth > 900) {
+          event.preventDefault();
+          toggleInputPane();
+          return;
+        }
+      }
+
+      if (
         event.key &&
         event.key.toLowerCase() === 'f' &&
         !event.ctrlKey &&
@@ -2067,6 +2206,9 @@
     els.formatSelect.value = state.format;
     updateInputCount();
     applyTheme(state.theme || document.documentElement.dataset.theme || preferredTheme());
+    applySplitWidth(state.splitWidth);
+    applyInputCollapsed(state.inputCollapsed);
+    initSplitResizer();
     bindEvents();
 
     if (state.formulas.length && state.formulasInput === state.input) {

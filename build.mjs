@@ -50,7 +50,7 @@ for (const [placeholder, content] of Object.entries(replacements)) {
 
 html = html.replace('<head>', () => '<head>\n  ' + licenseComment);
 
-const output = path.join(root, 'formula-extractor.html');
+const output = path.join(root, 'foliotex.html');
 fs.writeFileSync(output, html, 'utf8');
 console.log('Built ' + output);
 
