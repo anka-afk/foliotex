@@ -445,7 +445,7 @@
     original: '原始包装'
   };
 
-  const INLINE_MARK_RE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))/g;
+  const INLINE_MARK_RE = /(`[^`\n]+`|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)|\*\*\*((?:[^*\n]|\*(?!\*\*))+?)\*\*\*(?!\*)|\*\*((?:[^*\n]|\*(?!\*))+?)\*\*(?!\*)|~~((?:[^~\n]|~(?!~))+?)~~|\*(?!\s)((?:[^*\n]*?[^\s*])|[^\s*])\*(?!\*))/g;
 
   const HTML_MATH_SOURCE_SELECTOR = 'annotation[encoding*="x-tex"], script[type^="math/tex"], [data-latex], [data-tex]';
 
@@ -697,67 +697,147 @@
     els.formulaSheetModal.hidden = false;
   }
 
-  function appendFormattedLine(parent, line, transform) {
-    if (!line) return;
-    const makeText = function (value) {
-      return document.createTextNode(transform ? transform(value) : value);
-    };
-    INLINE_MARK_RE.lastIndex = 0;
+  function appendTextWithPlaceholders(parent, value, transform, placeholders, placeholderRe) {
+    if (!value) return;
+    if (!placeholders || !placeholders.length || !placeholderRe) {
+      parent.appendChild(document.createTextNode(transform ? transform(value) : value));
+      return;
+    }
+    placeholderRe.lastIndex = 0;
     let last = 0;
     let match;
-    while ((match = INLINE_MARK_RE.exec(line))) {
+    while ((match = placeholderRe.exec(value))) {
       if (match.index > last) {
-        parent.appendChild(makeText(line.slice(last, match.index)));
+        const chunk = value.slice(last, match.index);
+        parent.appendChild(document.createTextNode(transform ? transform(chunk) : chunk));
+      }
+      const occ = placeholders[Number(match[1])];
+      if (occ) {
+        parent.appendChild(makeDocFormula(occ.source, occ.type));
+      }
+      last = match.index + match[0].length;
+    }
+    if (last < value.length) {
+      const rest = value.slice(last);
+      parent.appendChild(document.createTextNode(transform ? transform(rest) : rest));
+    }
+  }
+
+  function appendFormattedLine(parent, line, transform, placeholders, placeholderRe, depth) {
+    if (!line) return;
+    const level = depth || 0;
+    if (level > 6) {
+      appendTextWithPlaceholders(parent, line, transform, placeholders, placeholderRe);
+      return;
+    }
+
+    const re = new RegExp(INLINE_MARK_RE.source, 'g');
+    let last = 0;
+    let match;
+    while ((match = re.exec(line))) {
+      if (match.index > last) {
+        appendTextWithPlaceholders(parent, line.slice(last, match.index), transform, placeholders, placeholderRe);
       }
       const token = match[0];
-      if (token.slice(0, 2) === '**') {
-        const strong = document.createElement('strong');
-        strong.textContent = transform ? transform(token.slice(2, -2)) : token.slice(2, -2);
-        parent.appendChild(strong);
-      } else if (token.charAt(0) === '`') {
+      if (token.charAt(0) === '`') {
         const code = document.createElement('code');
-        code.textContent = token.slice(1, -1);
+        appendTextWithPlaceholders(code, token.slice(1, -1), null, placeholders, placeholderRe);
         parent.appendChild(code);
+      } else if (match[2] != null && match[3] != null) {
+        const a = document.createElement('a');
+        a.href = match[3];
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        appendFormattedLine(a, match[2], transform, placeholders, placeholderRe, level + 1);
+        parent.appendChild(a);
+      } else if (match[4] != null) {
+        const strong = document.createElement('strong');
+        const em = document.createElement('em');
+        appendFormattedLine(em, match[4], transform, placeholders, placeholderRe, level + 1);
+        strong.appendChild(em);
+        parent.appendChild(strong);
+      } else if (match[5] != null) {
+        const strong = document.createElement('strong');
+        appendFormattedLine(strong, match[5], transform, placeholders, placeholderRe, level + 1);
+        parent.appendChild(strong);
+      } else if (match[6] != null) {
+        const del = document.createElement('del');
+        appendFormattedLine(del, match[6], transform, placeholders, placeholderRe, level + 1);
+        parent.appendChild(del);
+      } else if (match[7] != null) {
+        const em = document.createElement('em');
+        appendFormattedLine(em, match[7], transform, placeholders, placeholderRe, level + 1);
+        parent.appendChild(em);
       } else {
-        const link = /^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/.exec(token);
-        if (link) {
-          const a = document.createElement('a');
-          a.textContent = transform ? transform(link[1]) : link[1];
-          a.href = link[2];
-          a.target = '_blank';
-          a.rel = 'noopener noreferrer';
-          parent.appendChild(a);
-        } else {
-          parent.appendChild(document.createTextNode(token));
-        }
+        appendTextWithPlaceholders(parent, token, transform, placeholders, placeholderRe);
       }
       last = match.index + token.length;
     }
     if (last < line.length) {
-      parent.appendChild(makeText(line.slice(last)));
+      appendTextWithPlaceholders(parent, line.slice(last), transform, placeholders, placeholderRe);
     }
   }
 
-  function appendFormattedText(parent, text, transform) {
+  function appendFormattedText(parent, text, transform, placeholders, placeholderRe) {
     if (!text) return;
     const lines = text.split('\n');
     lines.forEach(function (line, index) {
       if (index > 0) parent.appendChild(document.createElement('br'));
-      appendFormattedLine(parent, line, transform);
+      appendFormattedLine(parent, line, transform, placeholders, placeholderRe, 0);
     });
   }
 
-  function appendInlineRange(parent, text, start, end, occurrences, transform) {
-    let cursor = start;
-    occurrences.forEach(function (occurrence) {
-      if (occurrence.start < start || occurrence.end > end) return;
+  function appendInlineSegment(parent, text, segStart, segEnd, inlineOccurrences, transform) {
+    if (segStart >= segEnd) return;
+    if (!inlineOccurrences.length) {
+      appendFormattedText(parent, text.slice(segStart, segEnd), transform);
+      return;
+    }
+
+    const rawSlice = text.slice(segStart, segEnd);
+    let openMark = '\uE000';
+    let closeMark = '\uE001';
+    while (rawSlice.indexOf(openMark) !== -1 || rawSlice.indexOf(closeMark) !== -1) {
+      openMark += '\uE000';
+      closeMark += '\uE001';
+    }
+
+    const placeholders = [];
+    let combined = '';
+    let cursor = segStart;
+    inlineOccurrences.forEach(function (occurrence) {
       if (occurrence.start > cursor) {
-        appendFormattedText(parent, text.slice(cursor, occurrence.start), transform);
+        combined += text.slice(cursor, occurrence.start);
       }
-      parent.appendChild(makeDocFormula(occurrence.source, occurrence.type));
+      const idx = placeholders.length;
+      placeholders.push(occurrence);
+      combined += openMark + idx + closeMark;
       cursor = occurrence.end;
     });
-    if (cursor < end) appendFormattedText(parent, text.slice(cursor, end), transform);
+    if (cursor < segEnd) {
+      combined += text.slice(cursor, segEnd);
+    }
+
+    const esc = function (s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); };
+    const placeholderRe = new RegExp(esc(openMark) + '(\\d+)' + esc(closeMark), 'g');
+    appendFormattedText(parent, combined, transform, placeholders, placeholderRe);
+  }
+
+  function appendInlineRange(parent, text, start, end, occurrences, transform) {
+    let segStart = start;
+    let inlineBatch = [];
+    occurrences.forEach(function (occurrence) {
+      if (occurrence.start < start || occurrence.end > end) return;
+      if (occurrence.type === 'display') {
+        appendInlineSegment(parent, text, segStart, occurrence.start, inlineBatch, transform);
+        inlineBatch = [];
+        parent.appendChild(makeDocFormula(occurrence.source, occurrence.type));
+        segStart = occurrence.end;
+      } else {
+        inlineBatch.push(occurrence);
+      }
+    });
+    appendInlineSegment(parent, text, segStart, end, inlineBatch, transform);
   }
 
   function occurrencesInRange(occurrences, start, end) {
@@ -1252,6 +1332,10 @@
         out += '*' + markdownCellText(node, activeLookup) + '*';
         return;
       }
+      if (tag === 'DEL' || tag === 'S') {
+        out += '~~' + markdownCellText(node, activeLookup) + '~~';
+        return;
+      }
       if (tag === 'A') {
         const href = node.getAttribute('href') || '';
         out += '[' + markdownCellText(node, activeLookup) + '](' + href + ')';
@@ -1375,6 +1459,13 @@
         .map(function (child) { return serializeDocNode(child, lookup, context); })
         .join('');
       return inner ? '*' + inner + '*' : '';
+    }
+
+    if (tag === 'DEL' || tag === 'S') {
+      const inner = Array.from(node.childNodes)
+        .map(function (child) { return serializeDocNode(child, lookup, context); })
+        .join('');
+      return inner ? '~~' + inner + '~~' : '';
     }
 
     if (tag === 'A') {
